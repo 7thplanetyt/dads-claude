@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://api.anthropic.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
   <meta name="referrer" content="no-referrer">
   <title>Dad's Claude</title>
   <meta name="description" content="A personal Claude chat, with every current model and its price.">
@@ -164,16 +164,12 @@
       </div>
 
       <section class="field">
-        <label for="keyInput" class="field-label">API key</label>
-        <div class="key-row">
-          <input id="keyInput" type="password" placeholder="sk-ant-…" spellcheck="false" autocapitalize="off" autocomplete="off">
-          <button type="button" class="btn ghost" id="toggleKey">Show</button>
-        </div>
+        <span class="field-label">Connection</span>
         <div class="key-actions">
-          <button type="button" class="btn primary" id="saveKey">Save &amp; check key</button>
+          <button type="button" class="btn ghost" id="checkConn">Check connection</button>
           <span class="status" id="keyStatus" role="status"></span>
         </div>
-        <p class="fine">The key stays in this browser and is sent only to Anthropic. Anyone with this device can use it, so keep the phone locked.</p>
+        <p class="fine">There's no password or key to manage. This device was set up with a private invite link; anyone with the link can use the credit, so don't share it.</p>
       </section>
 
       <section class="field">
@@ -204,7 +200,6 @@
         <span class="field-label">Clear data</span>
         <div class="danger-row">
           <button type="button" class="btn danger" id="deleteAll">Delete all chats</button>
-          <button type="button" class="btn danger" id="forgetKey">Remove API key</button>
         </div>
       </section>
     </div>

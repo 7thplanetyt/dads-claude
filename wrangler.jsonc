@@ -1,0 +1,10 @@
+{
+  // Dad's Claude: static site + API relay on Cloudflare Workers (free plan).
+  "name": "dads-claude",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "vars": { "UPSTREAM": "https://api.anthropic.com" },
+  "workers_dev": true,
+  "preview_urls": false
+}

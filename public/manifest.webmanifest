@@ -2,7 +2,6 @@
   "name": "Dad's Claude",
   "short_name": "Claude",
   "description": "A personal Claude chat, with every current model and its price.",
-  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#f7f4ee",

@@ -1,5 +1,6 @@
-// Dad's Claude — a personal Claude chat that runs entirely in the browser.
-// The API key lives in this browser's localStorage and is sent only to api.anthropic.com.
+// Dad's Claude — a personal Claude chat.
+// The browser never holds a Claude API key: requests go to this site's own /api relay
+// (src/worker.js), which checks the device's invite token and adds the key server-side.
 import Anthropic from "./vendor/anthropic-sdk-1.8.0.min.mjs";
 
 /* ------------------------------------------------------------------ */
@@ -66,7 +67,7 @@ const store = {
 };
 
 const S = {
-  apiKey: store.get("apiKey", ""),
+  access: store.get("access", ""),
   model: store.get("model", DEFAULT_MODEL),
   effort: store.get("effort", "medium"),
   name: store.get("name", "Dad"),
@@ -231,12 +232,22 @@ function addSpend(v) {
 /* ------------------------------------------------------------------ */
 /* API                                                                 */
 /* ------------------------------------------------------------------ */
-function makeClient(apiKey = S.apiKey) {
-  const opts = { apiKey, dangerouslyAllowBrowser: true, maxRetries: 2 };
-  // Developer testing only: point the app at a local mock server. Not reachable from a URL.
-  const base = store.get("apiBase", "");
-  if (base) opts.baseURL = base;
-  return new Anthropic(opts);
+// The invite token is sent where the SDK would send an API key; the relay swaps it for the real key.
+// dangerouslyAllowBrowser only silences the SDK's browser warning: no real key is in the browser.
+function makeClient(token = S.access) {
+  return new Anthropic({ apiKey: token, baseURL: location.origin + "/api", dangerouslyAllowBrowser: true, maxRetries: 2 });
+}
+
+// Invite links look like https://…/?invite=TOKEN. The token stays in the address so that
+// "Add to Home Screen" (which has its own storage on iPhone) keeps working.
+const TOKEN_RE = /(?:^|[?#&])invite=([A-Za-z0-9_-]{16,200})/;
+function readInvite(text) {
+  const m = TOKEN_RE.exec(text || "") || /^\s*([A-Za-z0-9_-]{32,200})\s*$/.exec(text || "");
+  return m ? m[1] : "";
+}
+function takeInviteFromUrl() {
+  const token = readInvite(location.search) || readInvite(location.hash);
+  if (token && token !== S.access) { S.access = token; store.set("access", token); }
 }
 
 function systemPrompt() {
@@ -278,7 +289,7 @@ function echoSafe(content) {
 
 function describeError(err, model) {
   const apiMsg = err?.error?.error?.message || err?.message || String(err);
-  if (err instanceof Anthropic.AuthenticationError) return { msg: "That API key didn't work. It may be mistyped, or it was deleted in the Claude Console.", action: "settings" };
+  if (err instanceof Anthropic.AuthenticationError) return { msg: "This device's invite link has stopped working. Ask for a new link and open it here.", action: null };
   if (err instanceof Anthropic.PermissionDeniedError) return { msg: `This API key isn't allowed to use ${model.name}. Try a different model.`, action: "models" };
   if (err instanceof Anthropic.NotFoundError) return { msg: `${model.name} isn't available on this account. Try a different model.`, action: "models" };
   if (err instanceof Anthropic.RateLimitError) return { msg: "That's a lot of messages in a short time. Wait a minute, then try again.", action: "retry" };
@@ -380,7 +391,7 @@ function renderWelcome() {
   const m = modelById(S.model);
   const w = h("div", { class: "welcome" });
   w.append(h("h1", { html: `${greeting()}, <span>${esc((S.name || "").trim() || "there")}</span>.` }));
-  if (!S.apiKey) { w.append(renderSetupCard()); return w; }
+  if (!S.access) { w.append(renderInviteCard()); return w; }
   w.append(h("p", { class: "welcome-sub", text: "What can I help you with today?" }));
   const ideas = [
     { icon: ICON.bulb, title: "Explain something", text: "Like how compound interest works, in plain English", prompt: "Explain how compound interest works, in plain English, with a simple example." },
@@ -404,21 +415,46 @@ function renderWelcome() {
   return w;
 }
 
-function renderSetupCard() {
-  const input = h("input", { type: "password", placeholder: "Paste the API key (sk-ant-…)", spellcheck: "false", autocapitalize: "off", autocomplete: "off", "aria-label": "API key" });
+function renderInviteCard() {
+  const input = h("input", { type: "text", placeholder: "Paste the invite link", spellcheck: "false", autocapitalize: "off", autocomplete: "off", "aria-label": "Invite link" });
   const status = h("span", { class: "status", role: "status" });
-  const save = h("button", { class: "btn primary", text: "Save key", onclick: () => saveKey(input.value, status, save) });
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") save.click(); });
+  const use = h("button", { class: "btn primary", text: "Use this link", onclick: () => useInvite(input.value, status, use) });
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") use.click(); });
   return h("div", { class: "setup-card" },
-    h("h2", { text: "One-time setup" }),
-    h("p", { text: "This app talks to Claude with an API key from the Claude Console. The key is saved only on this device." }),
-    h("ol", {},
-      h("li", { html: 'Sign in at <a href="https://platform.claude.com" target="_blank" rel="noopener noreferrer">platform.claude.com</a> with the account that has the API credit.' }),
-      h("li", { text: "Open API keys and create a new key (name it after this device)." }),
-      h("li", { text: "Copy the key and paste it here." })),
+    h("h2", { text: "Open your invite link" }),
+    h("p", { text: "This app works with a private invite link. Open the link you were sent on this phone or computer, and you're all set. There's nothing else to set up." }),
+    h("p", { text: "If the link opened in a different browser, paste it here instead:" }),
     input,
-    h("div", { class: "key-actions" }, save, status),
+    h("div", { class: "key-actions" }, use, status),
   );
+}
+
+async function useInvite(value, statusEl, btn) {
+  const token = readInvite(value);
+  if (!token) { statusEl.textContent = "That doesn't look like an invite link."; statusEl.className = "status bad"; return; }
+  btn.disabled = true; statusEl.textContent = "Checking…"; statusEl.className = "status";
+  const ok = await checkConnection(statusEl, token);
+  btn.disabled = false;
+  if (ok) {
+    S.access = token; store.set("access", token);
+    history.replaceState(null, "", location.pathname + "?invite=" + token);
+    setTimeout(renderThread, 600);
+  }
+}
+
+// Free call through the relay: confirms the invite token and the relay's API key both work.
+async function checkConnection(statusEl, token = S.access) {
+  try {
+    await makeClient(token).models.list({ limit: 1 });
+    statusEl.textContent = "✓ Connected and working."; statusEl.className = "status ok";
+    return true;
+  } catch (err) {
+    statusEl.className = "status bad";
+    statusEl.textContent = err instanceof Anthropic.AuthenticationError
+      ? "That invite link isn't valid. Ask for a new one."
+      : "Couldn't reach Claude right now. Check the internet connection.";
+    return false;
+  }
 }
 
 function whoLine(modelId, requestedId) {
@@ -620,7 +656,7 @@ async function send(rawText) {
   if (busy) return;
   const text = (rawText || "").trim();
   if (!text && !pending.length) return;
-  if (!S.apiKey) { toast("Add the API key first"); openSettings(); return; }
+  if (!S.access) { toast("Open your invite link first"); renderThread(); return; }
 
   const model = modelById(S.model);
   const sentPhotos = pending;
@@ -785,9 +821,7 @@ function chooseModel(id) {
 }
 
 function openSettings() {
-  $("keyInput").value = S.apiKey;
-  $("keyInput").type = "password"; $("toggleKey").textContent = "Show";
-  $("keyStatus").textContent = S.apiKey ? "Key saved on this device." : "No key saved yet.";
+  $("keyStatus").textContent = S.access ? "This device is set up with an invite link." : "Not set up yet: open your invite link.";
   $("keyStatus").className = "status";
   $("nameInput").value = S.name;
   $("budgetInput").value = S.budget;
@@ -799,25 +833,6 @@ function renderEffort() {
   $("effortHelp").textContent = EFFORT[S.effort].help;
 }
 
-async function saveKey(value, statusEl, btn) {
-  const key = (value || "").trim();
-  if (!key) { statusEl.textContent = "Paste a key first."; statusEl.className = "status bad"; return; }
-  if (!key.startsWith("sk-ant-")) { statusEl.textContent = "That doesn't look like an API key (they start with sk-ant-)."; statusEl.className = "status bad"; return; }
-  statusEl.textContent = "Checking…"; statusEl.className = "status"; btn.disabled = true;
-  try {
-    await makeClient(key).models.list({ limit: 1 }); // free call: just confirms the key works
-    S.apiKey = key; store.set("apiKey", key);
-    statusEl.textContent = "✓ Key works and is saved."; statusEl.className = "status ok";
-    if (!current?.messages.length) setTimeout(renderThread, 600);
-  } catch (err) {
-    if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) {
-      statusEl.textContent = "That key was not accepted. Check it was copied completely."; statusEl.className = "status bad";
-    } else {
-      S.apiKey = key; store.set("apiKey", key);
-      statusEl.textContent = "Saved, but couldn't check it right now (no connection?)."; statusEl.className = "status";
-    }
-  } finally { btn.disabled = false; }
-}
 
 /* ------------------------------------------------------------------ */
 /* Sidebar                                                             */
@@ -860,11 +875,11 @@ function bind() {
   // Spend line at the top of the models sheet.
   el.modelCards.before(h("div", { class: "welcome-meta", id: "sheetSpend" }));
 
-  $("toggleKey").addEventListener("click", () => {
-    const k = $("keyInput"); const show = k.type === "password";
-    k.type = show ? "text" : "password"; $("toggleKey").textContent = show ? "Hide" : "Show";
+  $("checkConn").addEventListener("click", async (e) => {
+    const b = e.currentTarget; b.disabled = true;
+    $("keyStatus").textContent = "Checking…"; $("keyStatus").className = "status";
+    await checkConnection($("keyStatus")); b.disabled = false;
   });
-  $("saveKey").addEventListener("click", (e) => saveKey($("keyInput").value, $("keyStatus"), e.currentTarget));
   $("nameInput").addEventListener("change", (e) => {
     S.name = e.target.value.trim(); store.set("name", S.name); renderHeader();
     if (!current?.messages.length) renderThread();
@@ -885,20 +900,18 @@ function bind() {
     if (!confirm("Delete every chat on this device? This can't be undone.")) return;
     stopIfBusy(); chats = []; current = null; await db.clear(); renderChatList(); renderThread(); toast("All chats deleted");
   });
-  $("forgetKey").addEventListener("click", () => {
-    if (!confirm("Remove the API key from this device?")) return;
-    S.apiKey = ""; store.del("apiKey"); $("keyInput").value = ""; $("keyStatus").textContent = "Key removed."; renderThread();
-  });
 
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSidebar(); });
 }
 
 async function init() {
+  takeInviteFromUrl();
+  store.del("apiKey"); // from the first version, which stored a real key in the browser
   setupMarkdown();
   bind();
   chats = (await db.all()).filter((c) => c && Array.isArray(c.messages));
   renderHeader(); renderSpend(); renderChatList(); renderThread(); updateSend();
-  if (!coarse && S.apiKey) el.input.focus();
+  if (!coarse && S.access) el.input.focus();
 }
 
 init();
